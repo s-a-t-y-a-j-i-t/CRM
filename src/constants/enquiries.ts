@@ -1,0 +1,46 @@
+import {
+  ARTWORK_STATUSES,
+  ENQUIRY_PRIORITIES,
+  ENQUIRY_SOURCES,
+  ENQUIRY_STATUSES,
+  ENQUIRY_TYPES,
+  SAMPLE_STATUSES,
+  SPECIFICATION_STATUSES,
+  type EnquiryStatus,
+} from "@/types/enquiries";
+import { optionsFrom, pharmaLabel } from "@/constants/pharma";
+
+export { pharmaLabel };
+
+export const ENQUIRY_TYPE_OPTIONS = optionsFrom(ENQUIRY_TYPES);
+export const ENQUIRY_SOURCE_OPTIONS = optionsFrom(ENQUIRY_SOURCES);
+export const ENQUIRY_STATUS_OPTIONS = optionsFrom(ENQUIRY_STATUSES);
+export const ENQUIRY_PRIORITY_OPTIONS = optionsFrom(ENQUIRY_PRIORITIES);
+export const ARTWORK_STATUS_OPTIONS = optionsFrom(ARTWORK_STATUSES);
+export const SPECIFICATION_STATUS_OPTIONS = optionsFrom(SPECIFICATION_STATUSES);
+export const SAMPLE_STATUS_OPTIONS = optionsFrom(SAMPLE_STATUSES);
+
+export const PIPELINE_COLUMNS: EnquiryStatus[] = [
+  "NEW",
+  "UNDER_REVIEW",
+  "REQUIREMENT_PENDING",
+  "TECHNICAL_REVIEW",
+  "FEASIBILITY_PENDING",
+  "QUOTATION_PENDING",
+  "NEGOTIATION",
+  "WON",
+  "LOST",
+];
+
+export const OPEN_ENQUIRY_STATUSES: EnquiryStatus[] = [
+  "NEW",
+  "UNDER_REVIEW",
+  "REQUIREMENT_PENDING",
+  "TECHNICAL_REVIEW",
+  "FEASIBILITY_PENDING",
+  "FEASIBILITY_APPROVED",
+  "QUOTATION_PENDING",
+  "QUOTATION_CREATED",
+  "NEGOTIATION",
+  "ON_HOLD",
+];

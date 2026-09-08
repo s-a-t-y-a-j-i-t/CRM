@@ -1,0 +1,570 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    // users/{uid}: IdentityProfile (roleId, status ACTIVE|INACTIVE|SUSPENDED)
+    // roles/{roleId}: name, permissions[], status, isSystem
+    // counters/employeeId: Admin SDK only
+    // Custom claims: request.auth.token.role (role id only, not permission arrays)
+    // customers, contacts, leads, enquiries, opportunities, products,
+    // product_requirements, feasibility, costings, quotations, purchase_orders,
+    // manufacturing_orders, batches, dispatches, invoices, payments,
+    // complaints, documents, activities, notifications
+    // audit_logs: append-only via Admin SDK
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function userRole() {
+      return userDoc().keys().hasAny(['roleId']) ? userDoc().roleId : userDoc().role;
+    }
+
+    function isActiveUser() {
+      return userDoc().status == 'ACTIVE' || userDoc().isActive == true;
+    }
+
+    function claimRole() {
+      return request.auth.token.role;
+    }
+
+    function hasRole(roles) {
+      return isAuthenticated() && (
+        claimRole() in roles ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && userRole() in roles && isActiveUser())
+      );
+    }
+
+    function isStaff() {
+      return hasRole([
+        'super_admin', 'admin', 'management', 'sales_manager', 'business_development',
+        'sales_executive', 'production', 'quality_assurance', 'quality_control',
+        'regulatory', 'finance', 'dispatch', 'customer_support', 'viewer'
+      ]);
+    }
+
+    function isAdmin() {
+      return hasRole(['super_admin', 'admin']);
+    }
+
+    function hasRequired(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function boundedString(field, maxLen) {
+      return request.resource.data[field] is string && request.resource.data[field].size() > 0
+        && request.resource.data[field].size() <= maxLen;
+    }
+
+    function auditFieldsValid() {
+      return request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt is timestamp
+        && request.resource.data.createdBy is string
+        && request.resource.data.updatedBy is string
+        && request.resource.data.status is string
+        && request.resource.data.status.size() < 40;
+    }
+
+    function createdBySelf() {
+      return request.resource.data.createdBy == request.auth.uid;
+    }
+
+    function immutableAudit() {
+      return request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.id == resource.data.id;
+    }
+
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin() || hasRole(['management']));
+      allow create: if isAdmin();
+      allow update: if isAdmin() || (
+        request.auth.uid == userId
+        && request.resource.data.roleId == resource.data.roleId
+        && request.resource.data.status == resource.data.status
+        && request.resource.data.employeeId == resource.data.employeeId
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['firstName','lastName','displayName','phone','profileImage','photoURL','updatedAt','updatedBy'])
+      );
+      allow delete: if false;
+    }
+
+    match /roles/{roleId} {
+      allow read: if isStaff();
+      allow create, update: if isAdmin();
+      allow delete: if false;
+    }
+
+    match /permissions/{id} {
+      allow read: if isStaff();
+      allow write: if false;
+    }
+
+    match /counters/{id} {
+      allow read, write: if false;
+    }
+
+    match /audit_logs/{logId} {
+      allow read: if hasRole(['super_admin', 'admin', 'management']);
+      allow create, update, delete: if false;
+    }
+
+    function canManageCustomers() {
+      return hasRole(['super_admin','admin','sales_manager','business_development','sales_executive']);
+    }
+
+    match /customers/{id} {
+      allow read: if isStaff();
+      allow create: if canManageCustomers()
+        && (boundedString('companyName', 180) || boundedString('legalName', 180));
+      allow update: if canManageCustomers()
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.customerCode == resource.data.customerCode;
+      allow delete: if false;
+
+      match /contacts/{contactId} {
+        allow read: if isStaff();
+        allow create, update: if canManageCustomers();
+        allow delete: if isAdmin();
+      }
+      match /notes/{noteId} {
+        allow read: if isStaff();
+        allow create: if canManageCustomers();
+        allow update, delete: if false;
+      }
+      match /activities/{activityId} {
+        allow read: if isStaff();
+        allow create, update: if canManageCustomers();
+        allow delete: if false;
+      }
+      match /documents/{docId} {
+        allow read: if isStaff();
+        allow create: if canManageCustomers();
+        allow update, delete: if isAdmin();
+      }
+    }
+
+    match /contacts/{id} {
+      allow read: if isStaff();
+      allow create, update: if canManageCustomers();
+      allow delete: if isAdmin();
+    }
+
+    function canManageLeads() {
+      return hasRole(['super_admin','admin','sales_manager','business_development','sales_executive']);
+    }
+
+    match /leads/{id} {
+      allow read: if isStaff();
+      allow create: if canManageLeads()
+        && boundedString('companyName', 180)
+        && boundedString('contactName', 120);
+      allow update: if canManageLeads()
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.leadCode == resource.data.leadCode;
+      allow delete: if false;
+    }
+
+    match /lead_notes/{id} {
+      allow read: if isStaff();
+      allow create: if canManageLeads();
+      allow update, delete: if false;
+    }
+
+    match /lead_documents/{id} {
+      allow read: if isStaff();
+      allow create: if canManageLeads();
+      allow update, delete: if isAdmin();
+    }
+
+    match /lead_follow_ups/{id} {
+      allow read: if isStaff();
+      allow create, update: if canManageLeads();
+      allow delete: if false;
+    }
+
+    match /lead_activities/{id} {
+      allow read: if isStaff();
+      allow create, update: if canManageLeads();
+      allow delete: if false;
+    }
+
+    function canManageEnquiries() {
+      return hasRole(['super_admin','admin','sales_manager','business_development','sales_executive']);
+    }
+
+    match /enquiries/{id} {
+      allow read: if isStaff();
+      allow create: if canManageEnquiries()
+        && boundedString('enquiryNumber', 24);
+      allow update: if canManageEnquiries()
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.enquiryNumber == resource.data.enquiryNumber;
+      allow delete: if false;
+    }
+
+    match /enquiry_notes/{id} {
+      allow read: if isStaff();
+      allow create: if canManageEnquiries();
+      allow update, delete: if false;
+    }
+
+    match /enquiry_documents/{id} {
+      allow read: if isStaff();
+      allow create: if canManageEnquiries();
+      allow update, delete: if isAdmin();
+    }
+
+    match /enquiry_follow_ups/{id} {
+      allow read: if isStaff();
+      allow create, update: if canManageEnquiries();
+      allow delete: if false;
+    }
+
+    match /enquiry_activities/{id} {
+      allow read: if isStaff();
+      allow create, update: if canManageEnquiries();
+      allow delete: if false;
+    }
+
+    match /requirement_versions/{id} {
+      allow read: if isStaff();
+      allow create: if canManageEnquiries();
+      allow update, delete: if false;
+    }
+
+    match /opportunities/{id} {
+      allow read: if isStaff();
+      allow create, update: if hasRole(['super_admin','admin','sales_manager','business_development']);
+      allow delete: if isAdmin();
+    }
+
+    function canManageProducts() {
+      return hasRole(['super_admin','admin','business_development','regulatory','management']);
+    }
+
+    match /products/{id} {
+      allow read: if isStaff();
+      allow create: if canManageProducts()
+        && boundedString('productCode', 24);
+      allow update: if canManageProducts()
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.productCode == resource.data.productCode;
+      allow delete: if false;
+    }
+
+    match /product_specifications/{id} {
+      allow read: if isStaff();
+      allow create, update: if canManageProducts();
+      allow delete: if false;
+    }
+
+    match /product_documents/{id} {
+      allow read: if isStaff();
+      allow create: if canManageProducts();
+      allow update, delete: if isAdmin();
+    }
+
+    match /product_activities/{id} {
+      allow read: if isStaff();
+      allow create, update: if canManageProducts();
+      allow delete: if false;
+    }
+
+    match /product_requirements/{id} {
+      allow read: if isStaff();
+      allow create, update: if canManageEnquiries();
+      allow delete: if false;
+    }
+
+    function canManageFeasibility() {
+      return hasRole(['super_admin','admin','business_development','sales_manager','management']);
+    }
+
+    function canReviewFeasibility() {
+      return canManageFeasibility() || hasRole(['production','quality_assurance','quality_control','regulatory']);
+    }
+
+    match /feasibility/{id} {
+      allow read: if isStaff();
+      allow create, update: if canReviewFeasibility();
+      allow delete: if false;
+    }
+
+    match /feasibilities/{id} {
+      allow read: if isStaff();
+      allow create: if canManageFeasibility()
+        && boundedString('feasibilityNumber', 24);
+      allow update: if canReviewFeasibility()
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.feasibilityNumber == resource.data.feasibilityNumber;
+      allow delete: if false;
+    }
+
+    match /feasibility_reviews/{id} {
+      allow read: if isStaff();
+      allow create, update: if canReviewFeasibility();
+      allow delete: if false;
+    }
+
+    match /feasibility_clarifications/{id} {
+      allow read: if isStaff();
+      allow create, update: if canReviewFeasibility() || canManageEnquiries();
+      allow delete: if false;
+    }
+
+    match /feasibility_evaluations/{id} {
+      allow read: if isStaff();
+      allow create, update: if canReviewFeasibility();
+      allow delete: if false;
+    }
+
+    match /feasibility_documents/{id} {
+      allow read: if isStaff();
+      allow create: if canReviewFeasibility();
+      allow update, delete: if isAdmin();
+    }
+
+    function canReadCosting() {
+      return hasRole([
+        'super_admin', 'admin', 'management', 'sales_manager',
+        'business_development', 'sales_executive', 'finance', 'viewer'
+      ]);
+    }
+
+    function canSeeCostingFinancials() {
+      return hasRole([
+        'super_admin', 'admin', 'management', 'sales_manager',
+        'business_development', 'finance'
+      ]);
+    }
+
+    function canManageCosting() {
+      return hasRole(['super_admin', 'admin', 'sales_manager', 'business_development', 'finance']);
+    }
+
+    match /costings/{id} {
+      allow read: if canReadCosting();
+      allow create: if canManageCosting()
+        && boundedString('costingNumber', 28);
+      allow update: if canManageCosting()
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.costingNumber == resource.data.costingNumber;
+      allow delete: if false;
+    }
+
+    match /costing_materials/{id} {
+      allow read: if canSeeCostingFinancials();
+      allow create, update: if canManageCosting();
+      allow delete: if false;
+    }
+
+    match /costing_packaging/{id} {
+      allow read: if canSeeCostingFinancials();
+      allow create, update: if canManageCosting();
+      allow delete: if false;
+    }
+
+    match /costing_manufacturing/{id} {
+      allow read: if canSeeCostingFinancials();
+      allow create, update: if canManageCosting();
+      allow delete: if false;
+    }
+
+    match /costing_quality/{id} {
+      allow read: if canSeeCostingFinancials();
+      allow create, update: if canManageCosting();
+      allow delete: if false;
+    }
+
+    match /costing_regulatory/{id} {
+      allow read: if canSeeCostingFinancials();
+      allow create, update: if canManageCosting();
+      allow delete: if false;
+    }
+
+    match /costing_documentation/{id} {
+      allow read: if canSeeCostingFinancials();
+      allow create, update: if canManageCosting();
+      allow delete: if false;
+    }
+
+    match /costing_overhead/{id} {
+      allow read: if canSeeCostingFinancials();
+      allow create, update: if canManageCosting();
+      allow delete: if false;
+    }
+
+    match /costing_adjustments/{id} {
+      allow read: if canSeeCostingFinancials();
+      allow create, update: if canManageCosting();
+      allow delete: if false;
+    }
+
+    match /costing_versions/{id} {
+      allow read: if canSeeCostingFinancials();
+      allow create: if canManageCosting();
+      allow update, delete: if false;
+    }
+
+    match /costing_tiers/{id} {
+      allow read: if canSeeCostingFinancials();
+      allow create, update: if canManageCosting();
+      allow delete: if false;
+    }
+
+    match /costing_approvals/{id} {
+      allow read: if canReadCosting();
+      allow create: if canManageCosting() || hasRole(['management']);
+      allow update, delete: if false;
+    }
+
+    match /costing_documents/{id} {
+      allow read: if canReadCosting();
+      allow create: if canManageCosting();
+      allow update, delete: if isAdmin();
+    }
+
+    function canReadQuotation() {
+      return hasRole([
+        'super_admin', 'admin', 'management', 'sales_manager',
+        'business_development', 'sales_executive', 'finance', 'viewer'
+      ]);
+    }
+
+    function canManageQuotation() {
+      return hasRole(['super_admin', 'admin', 'sales_manager', 'business_development', 'finance']);
+    }
+
+    match /quotations/{id} {
+      allow read: if canReadQuotation();
+      allow create: if canManageQuotation()
+        && boundedString('quotationNumber', 28);
+      allow update: if canManageQuotation()
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.quotationNumber == resource.data.quotationNumber;
+      allow delete: if false;
+    }
+
+    match /quotation_items/{id} {
+      allow read: if canReadQuotation();
+      allow create, update: if canManageQuotation();
+      allow delete: if false;
+    }
+
+    match /quotation_charges/{id} {
+      allow read: if canReadQuotation();
+      allow create, update: if canManageQuotation();
+      allow delete: if false;
+    }
+
+    match /quotation_versions/{id} {
+      allow read: if canReadQuotation();
+      allow create: if canManageQuotation();
+      allow update, delete: if false;
+    }
+
+    match /quotation_approvals/{id} {
+      allow read: if canReadQuotation();
+      allow create: if canManageQuotation() || hasRole(['management']);
+      allow update, delete: if false;
+    }
+
+    match /quotation_documents/{id} {
+      allow read: if canReadQuotation();
+      allow create: if canManageQuotation();
+      allow update, delete: if isAdmin();
+    }
+
+    match /quotation_activities/{id} {
+      allow read: if canReadQuotation();
+      allow create: if canManageQuotation();
+      allow update, delete: if false;
+    }
+
+    match /purchase_orders/{id} {
+      allow read: if isStaff();
+      allow create, update: if hasRole(['super_admin','admin','sales_manager','business_development']);
+      allow delete: if isAdmin();
+    }
+
+    match /manufacturing_orders/{id} {
+      allow read: if isStaff();
+      allow create, update: if hasRole(['super_admin','admin','production']);
+      allow delete: if isAdmin();
+    }
+
+    match /batches/{id} {
+      allow read: if isStaff();
+      allow create, update: if hasRole(['super_admin','admin','production','quality_control']);
+      allow delete: if isAdmin();
+    }
+
+    match /dispatches/{id} {
+      allow read: if isStaff();
+      allow create, update: if hasRole(['super_admin','admin','dispatch']);
+      allow delete: if isAdmin();
+    }
+
+    match /invoices/{id} {
+      allow read: if isStaff();
+      allow create, update: if hasRole(['super_admin','admin','finance']);
+      allow delete: if false;
+    }
+
+    match /payments/{id} {
+      allow read: if isStaff();
+      allow create, update: if hasRole(['super_admin','admin','finance']);
+      allow delete: if false;
+    }
+
+    match /complaints/{id} {
+      allow read: if isStaff();
+      allow create, update: if hasRole(['super_admin','admin','quality_assurance','customer_support']);
+      allow delete: if isAdmin();
+    }
+
+    match /complaint_events/{id} {
+      allow read: if isStaff();
+      allow create: if hasRole(['super_admin','admin','quality_assurance','customer_support']);
+      allow update, delete: if false;
+    }
+
+    match /documents/{id} {
+      allow read: if isStaff();
+      allow create, update: if hasRole(['super_admin','admin','quality_assurance','quality_control','regulatory']);
+      allow delete: if isAdmin();
+    }
+
+    match /activities/{id} {
+      allow read: if isStaff();
+      allow create, update: if hasRole(['super_admin','admin','sales_manager','sales_executive','business_development','customer_support','finance','quality_assurance']);
+      allow delete: if isAdmin();
+    }
+
+    match /notifications/{id} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAdmin() || (isAuthenticated() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readBy','updatedAt','updatedBy']));
+      allow delete: if isAdmin();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

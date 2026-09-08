@@ -1,0 +1,32 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAllowedType() {
+      return request.resource.contentType in [
+        'application/pdf',
+        'image/png',
+        'image/jpeg',
+        'image/webp',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      ];
+    }
+
+    function withinSize() {
+      return request.resource.size < 15 * 1024 * 1024;
+    }
+
+    match /documents/{allPaths=**} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && isAllowedType() && withinSize();
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
